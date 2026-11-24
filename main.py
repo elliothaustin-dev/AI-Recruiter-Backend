@@ -5,6 +5,7 @@ import json
 import os
 import io
 from pypdf import PdfReader
+from supabase import create_client, Client
 
 app = FastAPI()
 
@@ -15,21 +16,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Función auxiliar para no repetir el código de la llamada a Gemini
-def call_gemini(prompt: str, text_data: str = None):
+# --- CONEXIÓN A SUPABASE ---
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+
+def call_gemini(prompt: str):
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        raise HTTPException(status_code=500, detail="API Key no configurada en Vercel")
+        raise HTTPException(status_code=500, detail="API Key de Gemini no configurada")
 
-    # Usamos el modelo flash-lite de tu proyecto anterior
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key={api_key}"
-    
-    # Preparamos el contenido
-    parts = [{"text": prompt}]
-    if text_data:
-        parts.append({"text": text_data})
-
-    payload = {"contents": [{"parts": parts}]}
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
     headers = {'Content-Type': 'application/json'}
     
     response = requests.post(url, headers=headers, json=payload)
@@ -38,7 +36,7 @@ def call_gemini(prompt: str, text_data: str = None):
         result = response.json()
         texto = result['candidates'][0]['content']['parts'][0]['text']
         texto = texto.strip()
-        # Limpiamos los bloqueos de código Markdown
+        # Limpiar formato Markdown de la respuesta
         if texto.startswith("```json"):
             texto = texto[7:-3].strip()
         elif texto.startswith("```"):
@@ -47,37 +45,22 @@ def call_gemini(prompt: str, text_data: str = None):
     else:
         raise HTTPException(status_code=response.status_code, detail=response.text)
 
-
 @app.post("/api/evaluate-job")
 async def evaluate_job(title: str = Form(...), description: str = Form(...)):
-    try:
-        prompt = f"""
-        Eres un experto en reclutamiento de IA. Analiza esta oferta de trabajo:
-        TÍTULO: {title}
-        DESCRIPCIÓN: {description}
-
-        Tu tarea es calcular el Índice de Claridad del Rol de IA (ICR-IA) del 0 al 100.
-        Si la descripción es muy corta o ambigua (ej. pide muchas cosas sin sentido), el score baja.
-        Si es detallada y clara, el score sube.
-
-        Devuelve un JSON estrictamente estructurado con estas claves:
-        - "icr_score": (número entero)
-        - "arquetipo": (string, ej. "AI Engineer", "Data Scientist")
-        - "feedback": (string, una recomendación corta para el reclutador)
-        
-        Devuelve SOLO el JSON, sin texto extra.
-        """
-        
-        resultado = call_gemini(prompt)
-        return resultado
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
+    prompt = f"""
+    Eres un experto en reclutamiento de IA. Analiza esta oferta de trabajo:
+    TÍTULO: {title}
+    DESCRIPCIÓN: {description}
+    Calcula el Índice de Claridad del Rol de IA (ICR-IA) del 0 al 100.
+    Devuelve un JSON con: "icr_score" (entero), "arquetipo" (string), "feedback" (string).
+    SOLO EL JSON.
+    """
+    return call_gemini(prompt)
 
 @app.post("/api/analyze-cv")
 async def analyze_cv(file: UploadFile = File(...), job_description: str = Form(...)):
     try:
-        # 1. Leer el PDF y extraer el texto
+        # 1. Leer el PDF
         contents = await file.read()
         pdf_reader = PdfReader(io.BytesIO(contents))
         cv_text = ""
@@ -87,33 +70,39 @@ async def analyze_cv(file: UploadFile = File(...), job_description: str = Form(.
         if not cv_text.strip():
             raise HTTPException(status_code=400, detail="No se pudo extraer texto del PDF")
 
-        # 2. Prompt Maestro (Anonimización + Match Score + Preguntas)
+        # 2. Prompt para Gemini
         prompt = f"""
         Eres un sistema experto en reclutamiento técnico de IA.
-        Tienes la siguiente descripción del puesto:
-        {job_description}
-
-        Y tienes este Currículum Vitae (CV):
-        {cv_text}
-
-        Sigue estas instrucciones ESTRICTAMENTE:
-        1. Anonimiza el CV mentalmente (ignora nombre, edad, género, etc.).
-        2. Calcula un Match Score del 0 al 100 comparando las habilidades reales del CV con lo que pide el puesto.
-        3. Genera 3 preguntas de entrevista técnica basadas en el CV para un reclutador no técnico.
-
-        Devuelve un JSON estrictamente estructurado con estas claves:
-        - "match_score": (número entero)
-        - "analisis": (string con fortalezas y debilidades)
-        - "preguntas": (array de 3 strings con las preguntas)
+        Descripción del puesto: {job_description}
+        CV: {cv_text}
         
-        Devuelve SOLO el JSON, sin texto extra.
+        1. Anonimiza el CV mentalmente.
+        2. Calcula un Match Score del 0 al 100.
+        3. Genera 3 preguntas de entrevista técnica.
+        
+        Devuelve un JSON con: "match_score" (entero), "analisis" (string), "preguntas" (array de strings).
+        SOLO EL JSON.
         """
         
         resultado = call_gemini(prompt)
+
+        # 3. GUARDAR EN SUPABASE
+        if supabase:
+            try:
+                supabase.table("analisis_cv").insert({
+                    "candidate_name": "Candidato Anónimo",
+                    "position": "AI Engineer", # Lo dejamos fijo por ahora
+                    "match_score": resultado.get("match_score", 0),
+                    "analisis": resultado.get("analisis", ""),
+                    "preguntas": json.dumps(resultado.get("preguntas", [])) # Convertimos la lista a texto
+                }).execute()
+            except Exception as db_error:
+                print(f"Error guardando en Supabase: {db_error}")
+                # No detenemos la app si falla la base de datos, solo imprimimos el error
+
         return resultado
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/")
 def read_root():
