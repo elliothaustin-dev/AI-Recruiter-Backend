@@ -6,6 +6,7 @@ import requests
 import json
 import os
 import io
+import time
 from pypdf import PdfReader
 from supabase import create_client, Client
 
@@ -23,13 +24,25 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
-# Lista cerrada de arquetipos + categoría "Rol híbrido"
+# Lista cerrada de 16 arquetipos oficiales + categoría "Rol híbrido"
+# ("Prompt Engineering" es competencia transversal, no arquetipo)
 ARQUETIPOS_VALIDOS = [
-    "Applied AI Developer",
-    "AI / ML Engineer",
-    "Data & AI Specialist",
-    "AI Governance & Safety Specialist",
-    "AI Product & Strategy Lead",
+    "Data Analyst",
+    "Data Engineer",
+    "Data Scientist",
+    "ML Engineer",
+    "MLOps Engineer",
+    "AI Engineer",
+    "Agentic AI Engineer",
+    "Context Engineer",
+    "AI Evaluation Engineer",
+    "AI Safety / Red Team Engineer",
+    "AI Architect",
+    "AI Platform / Infrastructure Engineer",
+    "AI Product Manager",
+    "AI Consultant / Solutions Architect",
+    "Forward Deployed Engineer",
+    "AI Enablement Specialist",
     "Rol híbrido",
 ]
 
@@ -50,13 +63,13 @@ def _clamp_0_100(valor, default: int = 0) -> int:
 
 def _calcular_nivel(score: int) -> str:
     if score >= 80:
-        return "Alta claridad (80-100)"
+        return "Rol claro y especializado"
     elif score >= 55:
-        return "Claridad moderada (55-79)"
+        return "Rol comprensible con ambigüedad moderada"
     elif score >= 30:
-        return "Baja claridad (30-54)"
+        return "Rol híbrido o mal delimitado"
     else:
-        return "Crítico / Ambiguo (0-29)"
+        return "Descripción confusa o incoherente"
 
 def _normalizar_arquetipo(arquetipo_raw: Optional[str], es_hibrido: bool) -> str:
     if es_hibrido:
@@ -109,13 +122,19 @@ def call_gemini(prompt: str):
         "x-goog-api-key": api_key,
     }
 
-    response = requests.post(url, headers=headers, json=payload, timeout=25)
+    max_intentos = 3
+    for intento in range(max_intentos):
+        response = requests.post(url, headers=headers, json=payload, timeout=25)
 
-    if response.status_code == 200:
-        result = response.json()
-        texto = result["candidates"][0]["content"]["parts"][0]["text"]
-        return _extraer_json(texto)
-    else:
+        if response.status_code == 200:
+            result = response.json()
+            texto = result["candidates"][0]["content"]["parts"][0]["text"]
+            return _extraer_json(texto)
+
+        if response.status_code in (429, 503) and intento < max_intentos - 1:
+            time.sleep(1.5 * (intento + 1))
+            continue
+
         raise HTTPException(
             status_code=response.status_code,
             detail=f"Error Gemini ({response.status_code}): {response.text}",
@@ -154,6 +173,7 @@ async def evaluate_job(
     Clasificación de arquetipo:
     Elige ÚNICAMENTE uno de estos valores exactos: [{lista_arquetipos_str}].
     Usa "Rol híbrido" cuando la oferta mezcle responsabilidades dispares o múltiples perfiles sin un foco principal claro.
+    Ten en cuenta que "Prompt Engineering" es una competencia transversal y NO un arquetipo de esta lista.
     Indica en "es_hibrido" (booleano) si el rol combina múltiples funciones o perfiles.
 
     En "feedback", resume en español claro: fortalezas de claridad, vacíos o ambigüedades detectadas y qué mejorar en la vacante.
@@ -166,7 +186,7 @@ async def evaluate_job(
       "especificidad_tecnica": 0,
       "entregables": 0,
       "es_hibrido": false,
-      "arquetipo": "Applied AI Developer",
+      "arquetipo": "AI Engineer",
       "feedback": "..."
     }}
     """
