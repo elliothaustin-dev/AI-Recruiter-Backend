@@ -70,40 +70,56 @@ def _normalizar_arquetipo(arquetipo_raw: Optional[str], es_hibrido: bool) -> str
     return "Rol híbrido"
 
 def _extraer_json(texto: str) -> dict:
-    limpio = texto.strip()
+    limpio = (texto or "").strip()
     if limpio.startswith("```"):
         lineas = limpio.splitlines()
-        # Quita primera línea (```json o ```) y última línea (```)
         if lineas and lineas[0].startswith("```"):
             lineas = lineas[1:]
         if lineas and lineas[-1].strip() == "```":
             lineas = lineas[:-1]
         limpio = "\n".join(lineas).strip()
-    return json.loads(limpio)
+
+    try:
+        return json.loads(limpio)
+    except json.JSONDecodeError:
+        inicio = limpio.find("{")
+        fin = limpio.rfind("}")
+        if inicio != -1 and fin != -1 and fin > inicio:
+            return json.loads(limpio[inicio:fin + 1])
+        raise
 
 def call_gemini(prompt: str):
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
     if not api_key:
         raise HTTPException(status_code=500, detail="API Key de Gemini no configurada")
 
-    url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=){api_key}"
+    endpoint = (
+        "[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/)"
+        "gemini-flash-lite-latest:generateContent"
+    )
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.2,
-            "responseMimeType": "application/json"
-        }
+            "responseMimeType": "application/json",
+        },
     }
-    headers = {"Content-Type": "application/json"}
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+    }
 
-    response = requests.post(url, headers=headers, json=payload)
+    response = requests.post(endpoint, headers=headers, json=payload, timeout=25)
 
     if response.status_code == 200:
         result = response.json()
         texto = result["candidates"][0]["content"]["parts"][0]["text"]
         return _extraer_json(texto)
     else:
-        raise HTTPException(status_code=response.status_code, detail=response.text)
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=f"Error Gemini ({response.status_code}): {response.text}",
+        )
 
 
 @app.post("/api/evaluate-job")
