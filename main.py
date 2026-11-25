@@ -311,7 +311,7 @@ async def analyze_cv(file: UploadFile = File(...), job_description: str = Form(.
                     "position": "AI Engineer",
                     "match_score": resultado.get("match_score", 0),
                     "analisis": resultado.get("analisis", ""),
-                    "preguntas": json.dumps(resultado.get("preguntas", []))
+                    "preguntas": json.dumps(resultado.get("preguntas", []), ensure_ascii=False)
                 }).execute()
             except Exception as db_error:
                 print(f"Error guardando en Supabase: {db_error}")
