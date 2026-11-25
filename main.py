@@ -93,10 +93,7 @@ def call_gemini(prompt: str):
     if not api_key:
         raise HTTPException(status_code=500, detail="API Key de Gemini no configurada")
 
-    endpoint = (
-        "[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/)"
-        "gemini-flash-lite-latest:generateContent"
-    )
+    url = "[https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent](https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent)"
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
@@ -109,7 +106,7 @@ def call_gemini(prompt: str):
         "x-goog-api-key": api_key,
     }
 
-    response = requests.post(endpoint, headers=headers, json=payload, timeout=25)
+    response = requests.post(url, headers=headers, json=payload, timeout=25)
 
     if response.status_code == 200:
         result = response.json()
@@ -120,7 +117,6 @@ def call_gemini(prompt: str):
             status_code=response.status_code,
             detail=f"Error Gemini ({response.status_code}): {response.text}",
         )
-
 
 @app.post("/api/evaluate-job")
 async def evaluate_job(
@@ -229,3 +225,53 @@ async def evaluate_job(
         "feedback": feedback,
         "dimensiones": dims,
     }
+
+@app.post("/api/analyze-cv")
+async def analyze_cv(file: UploadFile = File(...), job_description: str = Form(...)):
+    try:
+        # 1. Leer el PDF
+        contents = await file.read()
+        pdf_reader = PdfReader(io.BytesIO(contents))
+        cv_text = ""
+        for page in pdf_reader.pages:
+            cv_text += page.extract_text() + "\n"
+
+        if not cv_text.strip():
+            raise HTTPException(status_code=400, detail="No se pudo extraer texto del PDF")
+
+        # 2. Prompt para Gemini
+        prompt = f"""
+        Eres un sistema experto en reclutamiento técnico de IA.
+        Descripción del puesto: {job_description}
+        CV: {cv_text}
+
+        1. Anonimiza el CV mentalmente.
+        2. Calcula un Match Score del 0 al 100.
+        3. Genera 3 preguntas de entrevista técnica.
+
+        Devuelve un JSON con: "match_score" (entero), "analisis" (string), "preguntas" (array de strings).
+        SOLO EL JSON.
+        """
+
+        resultado = call_gemini(prompt)
+
+        # 3. GUARDAR EN SUPABASE
+        if supabase:
+            try:
+                supabase.table("analisis_cv").insert({
+                    "candidate_name": "Candidato Anónimo",
+                    "position": "AI Engineer",
+                    "match_score": resultado.get("match_score", 0),
+                    "analisis": resultado.get("analisis", ""),
+                    "preguntas": json.dumps(resultado.get("preguntas", []))
+                }).execute()
+            except Exception as db_error:
+                print(f"Error guardando en Supabase: {db_error}")
+
+        return resultado
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/")
+def read_root():
+    return {"status": "API de AI Recruiter Copilot funcionando correctamente"}
