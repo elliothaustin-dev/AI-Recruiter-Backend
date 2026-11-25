@@ -140,6 +140,27 @@ def call_gemini(prompt: str):
             detail=f"Error Gemini ({response.status_code}): {response.text}",
         )
 
+def anonimizar_cv(cv_texto: str) -> str:
+    prompt = f"""
+    Eres un módulo de anonimización de datos personales (PII) para procesos de selección.
+    Reescribe el siguiente texto de CV eliminando o reemplazando cualquier dato que identifique directamente a la persona:
+    - Nombre y apellidos (usa "[CANDIDATO]")
+    - Correos electrónicos, teléfonos, direcciones físicas, documentos de identidad o enlaces personales directos
+    - Cualquier mención explícita al nombre del candidato en el cuerpo del texto
+
+    Conserva con total fidelidad: experiencia laboral, roles, empresas (si no revelan identidad personal directa), tecnologías, proyectos, educación, logros y fechas.
+    No agregues comentarios ni explicaciones. Devuelve SOLO un JSON válido con esta estructura:
+    {{
+      "cv_anonimizado": "..."
+    }}
+
+    CV ORIGINAL:
+    {cv_texto}
+    """
+    data = call_gemini(prompt)
+    anon = str(data.get("cv_anonimizado", "")).strip()
+    return anon if anon else cv_texto
+
 @app.post("/api/evaluate-job")
 async def evaluate_job(
     title: str = Form(...),
@@ -262,14 +283,18 @@ async def analyze_cv(file: UploadFile = File(...), job_description: str = Form(.
         if not cv_text.strip():
             raise HTTPException(status_code=400, detail="No se pudo extraer texto del PDF")
 
-        # 2. Prompt para Gemini
+        # 1.5 Sanitizar / anonimizar el CV antes de evaluarlo
+        cv_limpio = anonimizar_cv(cv_text)
+
+        # 2. Prompt para Gemini usando el CV ya anonimizado
         prompt = f"""
         Eres un sistema experto en reclutamiento técnico de IA.
+        El CV ya fue anonimizado previamente; no incluyas datos personales ni nombres reales en tu respuesta.
         Descripción del puesto: {job_description}
-        CV: {cv_text}
+        CV anonimizado: {cv_limpio}
 
-        1. Anonimiza el CV mentalmente.
-        2. Calcula un Match Score del 0 al 100.
+        1. Calcula un Match Score del 0 al 100.
+        2. Redacta un análisis técnico objetivo basado únicamente en las competencias y experiencia del CV.
         3. Genera 3 preguntas de entrevista técnica.
 
         Devuelve un JSON con: "match_score" (entero), "analisis" (string), "preguntas" (array de strings).
