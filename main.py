@@ -93,7 +93,10 @@ def call_gemini(prompt: str):
     if not api_key:
         raise HTTPException(status_code=500, detail="API Key de Gemini no configurada")
 
-    url = "[https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent](https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent)"
+    base = "https://" + "generativelanguage.googleapis.com"
+    ruta = "/v1beta/models/gemini-flash-lite-latest:generateContent"
+    url = base + ruta
+
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
