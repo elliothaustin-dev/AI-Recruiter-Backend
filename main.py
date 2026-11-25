@@ -55,7 +55,23 @@ async def evaluate_job(title: str = Form(...), description: str = Form(...)):
     Devuelve un JSON con: "icr_score" (entero), "arquetipo" (string), "feedback" (string).
     SOLO EL JSON.
     """
-    return call_gemini(prompt)
+    resultado = call_gemini(prompt)
+
+    # GUARDAR EN SUPABASE
+    if supabase:
+        try:
+            supabase.table("evaluacion_puestos").insert({
+                "titulo": title,
+                "descripcion": description,
+                "icr_score": resultado.get("icr_score"),
+                "arquetipo": resultado.get("arquetipo", ""),
+                "feedback": resultado.get("feedback", "")
+            }).execute()
+        except Exception as db_error:
+            print(f"Error guardando puesto en Supabase: {db_error}")
+            # No detenemos la app si falla la base de datos, solo imprimimos el error
+
+    return resultado
 
 @app.post("/api/analyze-cv")
 async def analyze_cv(file: UploadFile = File(...), job_description: str = Form(...)):
