@@ -161,6 +161,32 @@ def anonimizar_cv(cv_texto: str) -> str:
     anon = str(data.get("cv_anonimizado", "")).strip()
     return anon if anon else cv_texto
 
+def _resolver_position(position_form: Optional[str], job_description: str, analisis_raw: dict) -> str:
+    if position_form and position_form.strip():
+        return position_form.strip()
+
+    from_analisis = str(analisis_raw.get("position", "") or "").strip()
+    if from_analisis:
+        return from_analisis
+
+    try:
+        prompt = f"""
+        Extrae el título o nombre del puesto/rol al que corresponde esta descripción de vacante.
+        Si no se menciona explícitamente un título claro, devuelve "AI Engineer".
+        Responde SOLO un JSON válido con esta estructura:
+        {{
+          "position": "..."
+        }}
+
+        DESCRIPCIÓN DEL PUESTO:
+        {job_description}
+        """
+        data = call_gemini(prompt)
+        resuelto = str(data.get("position", "") or "").strip()
+        return resuelto if resuelto else "AI Engineer"
+    except Exception:
+        return "AI Engineer"
+
 @app.post("/api/evaluate-job")
 async def evaluate_job(
     title: str = Form(...),
@@ -271,7 +297,11 @@ async def evaluate_job(
     }
 
 @app.post("/api/analyze-cv")
-async def analyze_cv(file: UploadFile = File(...), job_description: str = Form(...)):
+async def analyze_cv(
+    file: UploadFile = File(...),
+    job_description: str = Form(...),
+    position: Optional[str] = Form(None),
+):
     try:
         # 1. Leer el PDF
         contents = await file.read()
@@ -290,6 +320,7 @@ async def analyze_cv(file: UploadFile = File(...), job_description: str = Form(.
         prompt = f"""
         Eres un sistema experto en reclutamiento técnico de IA.
         El CV ya fue anonimizado previamente; no incluyas datos personales ni nombres reales en tu respuesta.
+        Puesto declarado: {position or "No especificado (inferir desde la descripción)"}
         Descripción del puesto: {job_description}
         CV anonimizado: {cv_limpio}
 
@@ -297,18 +328,20 @@ async def analyze_cv(file: UploadFile = File(...), job_description: str = Form(.
         2. Redacta un análisis técnico objetivo basado únicamente en las competencias y experiencia del CV.
         3. Genera 3 preguntas de entrevista técnica.
 
-        Devuelve un JSON con: "match_score" (entero), "analisis" (string), "preguntas" (array de strings).
+        Devuelve un JSON con: "position" (string), "match_score" (entero), "analisis" (string), "preguntas" (array de strings).
         SOLO EL JSON.
         """
 
         resultado = call_gemini(prompt)
+        puesto_final = _resolver_position(position, job_description, resultado)
+        resultado["position"] = puesto_final
 
         # 3. GUARDAR EN SUPABASE
         if supabase:
             try:
                 supabase.table("analisis_cv").insert({
                     "candidate_name": "Candidato Anónimo",
-                    "position": "AI Engineer",
+                    "position": puesto_final,
                     "match_score": resultado.get("match_score", 0),
                     "analisis": resultado.get("analisis", ""),
                     "preguntas": json.dumps(resultado.get("preguntas", []), ensure_ascii=False)
