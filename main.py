@@ -25,7 +25,7 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
 # Lista cerrada de 16 arquetipos oficiales + categoría "Rol híbrido"
-# ("Prompt Engineering" es competencia transversal, no arquetipo)
+# NOMBRES UNIFICADOS CON LA TABLA DE LA MONOGRAFÍA (Punto 4 de Claude)
 ARQUETIPOS_VALIDOS = [
     "Data Analyst",
     "Data Engineer",
@@ -38,9 +38,9 @@ ARQUETIPOS_VALIDOS = [
     "AI Evaluation Engineer",
     "AI Safety / Red Team Engineer",
     "AI Architect",
-    "AI Platform / Infrastructure Engineer",
+    "AI Platform Engineer",          # <-- Unificado
     "AI Product Manager",
-    "AI Consultant / Solutions Architect",
+    "AI Consultant / Architect",     # <-- Unificado
     "Forward Deployed Engineer",
     "AI Enablement Specialist",
     "Rol híbrido",
@@ -313,10 +313,10 @@ async def analyze_cv(
         if not cv_text.strip():
             raise HTTPException(status_code=400, detail="No se pudo extraer texto del PDF")
 
-        # 1.5 Sanitizar / anonimizar el CV antes de evaluarlo
+        # 1.5 Sanitizar / anonimizar el CV antes de evaluarlo (Primer eslabón del Prompt Chaining)
         cv_limpio = anonimizar_cv(cv_text)
 
-        # 2. Prompt para Gemini usando el CV ya anonimizado
+        # 2. Prompt para Gemini usando el CV ya anonimizado (Segundo eslabón del Prompt Chaining)
         prompt = f"""
         Eres un sistema experto en reclutamiento técnico de IA.
         El CV ya fue anonimizado previamente; no incluyas datos personales ni nombres reales en tu respuesta.
